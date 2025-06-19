@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Differentiation System</title>
+    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/face-api.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        /* Core styling */
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* Main sections */
+        .input-section {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 720px;
+            margin: 0 auto;
+        }
+
+        #video, #canvas {
+            width: 100%;
+            border-radius: 8px;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        /* Controls */
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 5px;
+            background: #2a5298;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        button:hover {
+            background: #1e3c72;
+        }
+
+        button:disabled {
+            background: #ccc;
+        }
+
+        /* File upload */
+        .file-upload {
+            margin: 10px 0;
+        }
+
+        /* Stats Panel */
+        .stats-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .stat-box {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+        }
+
+        /* Loading */
+        .loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 1000;
+        }
+
+        /* Face List */
+        .face-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .face-item {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+        }
+
+        #nameInput {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            width: 100%;
+            max-width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="input-section">
+            <div class="video-container">
+                <video id="video" autoplay muted></video>
+                <canvas id="canvas"></canvas>
+            </div>
+            
+            <div class="controls">
+                <button id="registerBtn">
+                    <i class="fas fa-user-plus"></i> Register Face
+                </button>
+                <button id="startBtn">
+                    <i class="fas fa-play"></i> Start Recognition
+                </button>
+                <input type="file" id="imageUpload" accept="image/*" style="display: none">
+                <button id="uploadBtn">
+                    <i class="fas fa-upload"></i> Upload Image
+                </button>
+            </div>
+
+            <div class="file-upload">
+                <input type="text" id="nameInput" placeholder="Enter name for face">
+            </div>
+        </div>
+
+        <div class="stats-panel">
+            <h3>Recognition Statistics</h3>
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <h4>Registered Faces</h4>
+                    <div id="faceCount">0/10</div>
+                </div>
+                <div class="stat-box">
+                    <h4>Current Recognition</h4>
+                    <div id="recognitionStatus">Not active</div>
+                </div>
+                <div class="stat-box">
+                    <h4>Last Detection</h4>
+                    <div id="lastDetection">None</div>
+                </div>
+            </div>
+
+            <div class="face-list" id="faceList">
+                <!-- Registered faces will appear here -->
+            </div>
+        </div>
+    </div>
+
+    <div class="loading" id="loading">
+        Loading AI Models...
+    </div>
+
+    <script>
+        class FaceDifferentiationSystem {
+            constructor() {
+                this.video = document.getElementById('video');
+                this.canvas = document.getElementById('canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.registeredFaces = [];
+                this.isRecognizing = false;
+                this.modelsLoaded = false;
+                this.maxFaces = 10;
+
+                this.initializeSystem();
+            }
+
+            async initializeSystem() {
+                try {
+                    await this.loadModels();
+                    await this.setupCamera();
+                    this.setupEventListeners();
+                    this.updateStats();
+                } catch (error) {
+                    console.error('Initialization error:', error);
+                    this.showStatus('Error initializing system');
+                }
+            }
+
+            async loadModels() {
+                try {
+                    await Promise.all([
+                        faceapi.nets.tinyFaceDetector.loadFromUri('https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights'),
+                        faceapi.nets.faceLandmark68Net.loadFromUri('https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights'),
+                        faceapi.nets.faceRecognitionNet.loadFromUri('https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights'),
+                        faceapi.nets.faceExpressionNet.loadFromUri('https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights'),
+                        faceapi.nets.ageGenderNet.loadFromUri('https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights')
+                    ]);
+                    this.modelsLoaded = true;
+                    document.getElementById('loading').style.display = 'none';
+                } catch (error) {
+                    throw new Error('Failed to load AI models');
+                }
+            }
+
+            async setupCamera() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: { width: 720, height: 560 }
+                    });
+                    this.video.srcObject = stream;
+                    return new Promise(resolve => {
+                        this.video.onloadedmetadata = () => {
+                            this.canvas.width = this.video.videoWidth;
+                            this.canvas.height = this.video.videoHeight;
+                            resolve();
+                        };
+                    });
+                } catch (error) {
+                    throw new Error('Camera access denied');
+                }
+            }
+
+            setupEventListeners() {
+                document.getElementById('registerBtn').onclick = () => this.registerFace();
+                document.getElementById('startBtn').onclick = () => this.toggleRecognition();
+                document.getElementById('uploadBtn').onclick = () => document.getElementById('imageUpload').click();
+                document.getElementById('imageUpload').onchange = (e) => this.handleImageUpload(e);
+            }
+
+            async registerFace() {
+                if (this.registeredFaces.length >= this.maxFaces) {
+                    this.showStatus('Maximum number of faces (10) reached');
+                    return;
+                }
+
+                const name = document.getElementById('nameInput').value.trim();
+                if (!name) {
+                    this.showStatus('Please enter a name');
+                    return;
+                }
+
+                try {
+                    const detection = await faceapi.detectSingleFace(this.video, 
+                        new faceapi.TinyFaceDetectorOptions())
+                        .withFaceLandmarks()
+                        .withFaceDescriptor()
+                        .withAgeAndGender()
+                        .withFaceExpressions();
+
+                    if (detection) {
+                        this.registeredFaces.push({
+                            name: name,
+                            descriptor: detection.descriptor,
+                            age: Math.round(detection.age),
+                            gender: detection.gender,
+                            timestamp: new Date().toLocaleString()
+                        });
+                        this.updateFaceList();
+                        this.showStatus(`${name} registered successfully!`);
+                        document.getElementById('nameInput').value = '';
+                    } else {
+                        this.showStatus('No face detected. Please try again');
+                    }
+                } catch (error) {
+                    this.showStatus('Error registering face');
+                }
+            }
+
+            async handleImageUpload(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                try {
+                    const img = await faceapi.bufferToImage(file);
+                    const detection = await faceapi.detectSingleFace(img, 
+                        new faceapi.TinyFaceDetectorOptions())
+                        .withFaceLandmarks()
+                        .withFaceDescriptor()
+                        .withAgeAndGender()
+                        .withFaceExpressions();
+
+                    if (detection) {
+                        const name = document.getElementById('nameInput').value.trim() || 'Uploaded Face';
+                        this.registeredFaces.push({
+                            name: name,
+                            descriptor: detection.descriptor,
+                            age: Math.round(detection.age),
+                            gender: detection.gender,
+                            timestamp: new Date().toLocaleString()
+                        });
+                        this.updateFaceList();
+                        this.showStatus('Face uploaded and registered successfully!');
+                    } else {
+                        this.showStatus('No face detected in uploaded image');
+                    }
+                } catch (error) {
+                    this.showStatus('Error processing uploaded image');
+                }
+            }
+
+            toggleRecognition() {
+                this.isRecognizing = !this.isRecognizing;
+                const button = document.getElementById('startBtn');
+                button.innerHTML = this.isRecognizing ? 
+                    '<i class="fas fa-stop"></i> Stop Recognition' : 
+                    '<i class="fas fa-play"></i> Start Recognition';
+
+                if (this.isRecognizing) {
+                    this.startRecognition();
+                }
+            }
+
+            async startRecognition() {
+                if (!this.isRecognizing) return;
+
+                try {
+                    const detections = await faceapi.detectAllFaces(this.video, 
+                        new faceapi.TinyFaceDetectorOptions())
+                        .withFaceLandmarks()
+                        .withFaceDescriptors()
+                        .withAgeAndGender()
+                        .withFaceExpressions();
+
+                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                    
+                    if (detections.length > 0) {
+                        detections.forEach(detection => {
+                            const match = this.findBestMatch(detection.descriptor);
+                            const box = detection.detection.box;
+                            const drawBox = new faceapi.draw.DrawBox(box, { 
+                                label: `${match.name} (${Math.round((1 - match.distance) * 100)}%)
+                                Age: ${Math.round(detection.age)}
+                                Gender: ${detection.gender}
+                                Mood: ${this.getTopExpression(detection.expressions)}`
+                            });
+                            drawBox.draw(this.canvas);
+                        });
+
+                        this.updateStats(detections[0]);
+                    }
+
+                    requestAnimationFrame(() => this.startRecognition());
+                } catch (error) {
+                    console.error('Recognition error:', error);
+                    this.showStatus('Error during recognition');
+                }
+            }
+
+            findBestMatch(descriptor) {
+                if (this.registeredFaces.length === 0) {
+                    return { name: 'Unknown', distance: 1 };
+                }
+
+                let minDistance = Infinity;
+                let bestMatch = { name: 'Unknown', distance: minDistance };
+
+                this.registeredFaces.forEach(face => {
+                    const distance = faceapi.euclideanDistance(descriptor, face.descriptor);
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        bestMatch = { name: face.name, distance: distance };
+                    }
+                });
+
+                return bestMatch;
+            }
+
+            getTopExpression(expressions) {
+                return Object.entries(expressions)
+                    .reduce((a, b) => a[1] > b[1] ? a : b)[0];
+            }
+
+            updateStats(detection = null) {
+                document.getElementById('faceCount').textContent = 
+                    `${this.registeredFaces.length}/${this.maxFaces}`;
+                
+                document.getElementById('recognitionStatus').textContent = 
+                    this.isRecognizing ? 'Active' : 'Not active';
+
+                if (detection) {
+                    document.getElementById('lastDetection').textContent = 
+                        new Date().toLocaleTimeString();
+                }
+            }
+
+            updateFaceList() {
+                const list = document.getElementById('faceList');
+                list.innerHTML = this.registeredFaces.map(face => `
+                    <div class="face-item">
+                        <div><strong>${face.name}</strong></div>
+                        <div>Age: ${face.age}</div>
+                        <div>Gender: ${face.gender}</div>
+                        <div>Added: ${face.timestamp}</div>
+                    </div>
+                `).join('');
+                this.updateStats();
+            }
+
+            showStatus(message) {
+                const status = document.createElement('div');
+                status.textContent = message;
+                status.style.position = 'fixed';
+                status.style.top = '20px';
+                status.style.right = '20px';
+                status.style.padding = '10px';
+                status.style.background = '#333';
+                status.style.color = 'white';
+                status.style.borderRadius = '5px';
+                status.style.zIndex = '1000';
+
+                document.body.appendChild(status);
+                setTimeout(() => status.remove(), 3000);
+            }
+        }
+
+        // Initialize the system when the page loads
+        window.onload = () => new FaceDifferentiationSystem();
+    </script>
+</body>
+</html>
